@@ -506,6 +506,10 @@ unsigned long vm_mmap_pgoff(struct file *file, unsigned long addr,
 			return -EINTR;
 		ret = do_mmap(file, addr, len, prot, flag, pgoff, &populate,
 			      &uf);
+	
+		if(flag & MAP_SFORK)
+			printk("do_mmap ret: %ld\n", ret);
+
 		mmap_write_unlock(mm);
 		userfaultfd_unmap_complete(mm, &uf);
 		if (populate)

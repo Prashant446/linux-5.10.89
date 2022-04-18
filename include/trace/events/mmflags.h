@@ -142,6 +142,7 @@ IF_HAVE_PG_ARCH_2(PG_arch_2,		"arch_2"	)
 	{VM_WRITE,			"write"		},		\
 	{VM_EXEC,			"exec"		},		\
 	{VM_SHARED,			"shared"	},		\
+        {VM_SFORK,			"sfork"	        },		\
 	{VM_MAYREAD,			"mayread"	},		\
 	{VM_MAYWRITE,			"maywrite"	},		\
 	{VM_MAYEXEC,			"mayexec"	},		\

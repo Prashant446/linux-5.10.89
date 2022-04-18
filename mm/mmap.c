@@ -8,6 +8,7 @@
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+#define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -1415,6 +1416,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	if (!len)
 		return -EINVAL;
 
+	if(flags & MAP_SFORK)
+		PASSED
+
 	/*
 	 * Does the application expect PROT_READ to imply PROT_EXEC?
 	 *
@@ -1445,10 +1449,16 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	if (mm->map_count > sysctl_max_map_count)
 		return -ENOMEM;
 
+	if(flags & MAP_SFORK)
+		PASSED
+
 	/* Obtain the address to map to. we verify (or select) it and ensure
 	 * that it represents a valid section of the address space.
 	 */
 	addr = get_unmapped_area(file, addr, len, pgoff, flags);
+	if(flags & MAP_SFORK)
+		printk("The value of addr: %ld\n",addr);
+	
 	if (IS_ERR_VALUE(addr))
 		return addr;
 
@@ -1458,6 +1468,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 		if (vma && vma->vm_start < addr + len)
 			return -EEXIST;
 	}
+
+	if(flags & MAP_SFORK)
+		PASSED
 
 	if (prot == PROT_EXEC) {
 		pkey = execute_only_pkey(mm);
@@ -1471,6 +1484,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 */
 	vm_flags = calc_vm_prot_bits(prot, pkey) | calc_vm_flag_bits(flags) |
 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+
+	if(flags & MAP_SFORK)
+		printk("The value of vmflag: %lx\n",vm_flags);
 
 	if (flags & MAP_LOCKED)
 		if (!can_do_mlock())
@@ -1488,7 +1504,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 
 		flags_mask = LEGACY_MAP_MASK | file->f_op->mmap_supported_flags;
 
-		switch (flags & MAP_TYPE) {
+		switch (flags & (MAP_TYPE | MAP_SFORK)) {
 		case MAP_SHARED:
 			/*
 			 * Force use of MAP_SHARED_VALIDATE with non-legacy
@@ -1541,11 +1557,16 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 				return -EINVAL;
 			break;
 
+		case MAP_SFORK:
+			// todo: Add code for MAP_SFORK
+			PASSED
+			return -19;
+			break;
 		default:
 			return -EINVAL;
 		}
 	} else {
-		switch (flags & MAP_TYPE) {
+		switch (flags & (MAP_TYPE | MAP_SFORK)) {
 		case MAP_SHARED:
 			if (vm_flags & (VM_GROWSDOWN|VM_GROWSUP))
 				return -EINVAL;
@@ -1560,6 +1581,14 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			 * Set pgoff according to addr for anon_vma.
 			 */
 			pgoff = addr >> PAGE_SHIFT;
+			break;
+		case MAP_SFORK:
+            		/*
+			 * Set pgoff according to addr for anon_vma.
+			 */
+			pgoff = addr >> PAGE_SHIFT;
+			vm_flags |= VM_SFORK;
+			PASSED
 			break;
 		default:
 			return -EINVAL;
@@ -1581,6 +1610,12 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	}
 
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
+	
+    	if(flags & MAP_SFORK){
+		PASSED
+		printk("The value of address is %ld\n",addr);
+	}
+
 	if (!IS_ERR_VALUE(addr) &&
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))
@@ -1596,6 +1631,10 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 	unsigned long retval;
 
 	if (!(flags & MAP_ANONYMOUS)) {
+		
+		if(flags & MAP_SFORK)
+			printk("Flags: %lx\n",flags);		
+		
 		audit_mmap_fd(fd, flags);
 		file = fget(fd);
 		if (!file)
@@ -1629,9 +1668,16 @@ unsigned long ksys_mmap_pgoff(unsigned long addr, unsigned long len,
 			return PTR_ERR(file);
 	}
 
+	if(flags & MAP_SFORK)
+		PASSED
+	
 	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE);
 
 	retval = vm_mmap_pgoff(file, addr, len, prot, flags, pgoff);
+	
+	if(flags & MAP_SFORK)
+		printk("vm_mmap_pgoff ret: %ld\n", retval);
+		
 out_fput:
 	if (file)
 		fput(file);

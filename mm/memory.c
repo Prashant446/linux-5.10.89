@@ -99,6 +99,8 @@ struct page *mem_map;
 EXPORT_SYMBOL(mem_map);
 #endif
 
+#define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+
 /*
  * A number of key systems in x86 including ioremap() rely on the assumption
  * that high_memory defines the upper bound on direct map memory, then end
@@ -891,6 +893,13 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	 */
 	if (vm_flags & VM_SHARED)
 		pte = pte_mkclean(pte);
+    
+    /* for sfork */
+	if (vm_flags & VM_SFORK) {
+		printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+		pte = pte_mkclean(pte);
+	}
+    
 	pte = pte_mkold(pte);
 
 	if (!userfaultfd_wp(dst_vma))
@@ -1166,9 +1175,13 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	 * parent mm. And a permission downgrade will only happen if
 	 * is_cow_mapping() returns true.
 	 */
+	if(src_vma->vm_flags & VM_SFORK)
+		PASSED
 	is_cow = is_cow_mapping(src_vma->vm_flags);
 
 	if (is_cow) {
+		if(src_vma->vm_flags & VM_SFORK)
+			PASSED
 		mmu_notifier_range_init(&range, MMU_NOTIFY_PROTECTION_PAGE,
 					0, src_vma, src_mm, addr, end);
 		mmu_notifier_invalidate_range_start(&range);
@@ -3122,6 +3135,11 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		if ((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 				     (VM_WRITE|VM_SHARED))
 			return wp_pfn_shared(vmf);
+        
+        /* For sfork*/
+        if ((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
+				     (VM_WRITE|VM_SFORK))
+			return wp_pfn_shared(vmf);
 
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		return wp_page_copy(vmf);
@@ -3154,7 +3172,11 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	} else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 					(VM_WRITE|VM_SHARED))) {
 		return wp_page_shared(vmf);
-	}
+    } else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
+					(VM_WRITE|VM_SFORK))) {
+        printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+		return wp_page_shared(vmf);
+    }
 copy:
 	/*
 	 * Ok, we need to copy. Oh, well..
@@ -3548,12 +3570,16 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	 *
 	 * Here we only have mmap_read_lock(mm).
 	 */
+
 	if (pte_alloc(vma->vm_mm, vmf->pmd))
 		return VM_FAULT_OOM;
 
 	/* See the comment in pte_alloc_one_map() */
 	if (unlikely(pmd_trans_unstable(vmf->pmd)))
 		return 0;
+
+	if(vma->vm_flags & VM_SFORK)
+		PASSED
 
 	/* Use the zero-page for reads */
 	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
@@ -3876,11 +3902,12 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
-	if (write && !(vma->vm_flags & VM_SHARED)) {
+	if (write && !(vma->vm_flags & (VM_SHARED | VM_SFORK))) {
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(page, vma);
 	} else {
+        // printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page, false);
 	}
@@ -3915,10 +3942,12 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 
 	/* Did we COW the page? */
 	if ((vmf->flags & FAULT_FLAG_WRITE) &&
-	    !(vmf->vma->vm_flags & VM_SHARED))
-		page = vmf->cow_page;
-	else
+	     !(vmf->vma->vm_flags & (VM_SHARED | VM_SFORK)))
+            page = vmf->cow_page;
+	else {
+		// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 		page = vmf->page;
+	}
 
 	/*
 	 * check even for read faults because we might have lost our CoWed
@@ -4193,6 +4222,11 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 		}
 	} else if (!(vmf->flags & FAULT_FLAG_WRITE))
 		ret = do_read_fault(vmf);
+	else if (vma->vm_flags & VM_SFORK) /* for sfork */
+	{
+		printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+		ret = do_shared_fault(vmf);
+	}
 	else if (!(vma->vm_flags & VM_SHARED))
 		ret = do_cow_fault(vmf);
 	else
@@ -4287,6 +4321,8 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 	if (page_mapcount(page) > 1 && (vma->vm_flags & VM_SHARED))
 		flags |= TNF_SHARED;
 
+   	// todo: do the same for VM_SFORK
+    
 	last_cpupid = page_cpupid_last(page);
 	page_nid = page_to_nid(page);
 	target_nid = numa_migrate_prep(page, vma, vmf->address, page_nid,
@@ -4429,8 +4465,11 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	}
 
 	if (!vmf->pte) {
-		if (vma_is_anonymous(vmf->vma))
+		if (vma_is_anonymous(vmf->vma)){
+			if(vmf->vma->vm_flags & VM_SFORK)
+				PASSED
 			return do_anonymous_page(vmf);
+		}
 		else
 			return do_fault(vmf);
 	}
