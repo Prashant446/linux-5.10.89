@@ -177,6 +177,8 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
 	struct vm_area_struct *next = vma->vm_next;
 
 	might_sleep();
+	if(unlikely(vma->vm_flags & VM_SFORK))
+		remove_vma_shared_area(vma->sa, vma);
 	if (vma->vm_ops && vma->vm_ops->close)
 		vma->vm_ops->close(vma);
 	if (vma->vm_file)
@@ -1039,6 +1041,8 @@ static inline int is_mergeable_vma(struct vm_area_struct *vma,
 	 * the kernel to generate new VMAs when old one could be
 	 * extended instead.
 	 */
+	if(vma>vm_flags & VM_SFORK)
+		return 0;
 	if ((vma->vm_flags ^ vm_flags) & ~VM_SOFTDIRTY)
 		return 0;
 	if (vma->vm_file != file)
@@ -1457,7 +1461,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 */
 	addr = get_unmapped_area(file, addr, len, pgoff, flags);
 	if(flags & MAP_SFORK)
-		printk("The value of addr: %ld\n",addr);
+		printk("The value of addr: %px\n",addr);
 	
 	if (IS_ERR_VALUE(addr))
 		return addr;
@@ -1613,7 +1617,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	
     	if(flags & MAP_SFORK){
 		PASSED
-		printk("The value of address is %ld\n",addr);
+		printk("The value of address is %px\n",addr);
 	}
 
 	if (!IS_ERR_VALUE(addr) &&
@@ -1831,6 +1835,7 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	vma->vm_flags = vm_flags;
 	vma->vm_page_prot = vm_get_page_prot(vm_flags);
 	vma->vm_pgoff = pgoff;
+	vma->sa = NULL;
 
 	if (file) {
 		if (vm_flags & VM_DENYWRITE) {
@@ -1892,6 +1897,12 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 			goto free_vma;
 	} else {
 		vma_set_anonymous(vma);
+		if(unlikely(vm_flags & VM_SFORK)){
+			// add the shared_area_struct here
+			PASSED
+			init_vma_shared_area(&vma->sa);
+			add_vma_shared_area(vma->sa, vma);
+		}
 	}
 
 	/* Allow architectures to sanity-check the vm_flags */

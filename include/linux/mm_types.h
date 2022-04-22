@@ -67,6 +67,17 @@ struct mem_cgroup;
 #define _struct_page_alignment
 #endif
 
+struct vma_node{
+    struct vm_area_struct* vma;
+    struct vma_node* next;
+};
+
+struct shared_area_struct {
+	atomic_t ref_count;
+	spinlock_t sl;
+	struct vma_node* head;
+};
+
 struct page {
 	unsigned long flags;		/* Atomic flags, some possibly
 					 * updated asynchronously */
@@ -327,7 +338,7 @@ struct vm_area_struct {
 	/* Second cache line starts here. */
 
 	struct mm_struct *vm_mm;	/* The address space we belong to. */
-
+	struct shared_area_struct *sa;  /* The shared area meta data struct in case of VM_SFORK */
 	/*
 	 * Access permissions of this VMA.
 	 * See vmf_insert_mixed_prot() for discussion.

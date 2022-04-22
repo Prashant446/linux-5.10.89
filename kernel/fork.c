@@ -112,6 +112,7 @@
  * Minimum number of threads to boot the kernel
  */
 #define MIN_THREADS 20
+#define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 
 /*
  * Maximum number of threads
@@ -156,6 +157,87 @@ int nr_processes(void)
 		total += per_cpu(process_counts, cpu);
 
 	return total;
+}
+
+void init_vma_shared_area(struct shared_area_struct **psa)
+{
+	struct shared_area_struct *sa;
+	sa = kmalloc(sizeof(struct shared_area_struct), GFP_KERNEL);
+	memset(sa, 0, sizeof(struct shared_area_struct));
+	atomic_set(&sa->ref_count, 1);
+	spin_lock_init(&sa->sl);
+	sa->head = kmalloc(sizeof(struct vma_node), GFP_KERNEL);
+	sa->head->vma = NULL;
+	sa->head->next = NULL;
+	*psa = sa;
+}
+
+void destroy_vma_shared_area(struct shared_area_struct *sa)
+{
+	if(sa == NULL)
+		return;
+	kfree(sa->head);
+	kfree(sa);
+}
+
+void add_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* vma){
+	// check if the process already exists in the list
+	struct vma_node* c_node = sa->head;
+	int flag = 0;
+	
+	spin_lock(&sa->sl);
+	
+	while(c_node){
+		if(c_node->vma == vma){
+			flag = 1;
+			break;
+		}
+		c_node = c_node->next;
+	}
+	if(flag)
+		goto unlock;
+	
+	c_node = sa->head;
+	while(c_node->next != NULL) c_node = c_node->next;
+	c_node->next = kmalloc(sizeof(struct vma_node), GFP_KERNEL);
+	c_node = c_node->next;
+	c_node->vma = vma;
+	c_node->next = NULL;
+	atomic_inc(&sa->ref_count);
+unlock:
+	spin_unlock(&sa->sl);
+	return;
+}
+
+void remove_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* vma){
+	struct vma_node* c_node = sa->head;
+	struct vma_node* ne = NULL;
+	int flag = 0;
+
+	spin_lock(&sa->sl);
+	
+	while(c_node){
+		if(c_node->vma == vma){
+			flag = 1;
+			break;
+		}
+		c_node = c_node->next; 
+	}
+	if(!flag) 
+		goto unlock;
+
+	c_node = sa->head;
+	while(c_node->next->vma != vma) c_node = c_node->next;
+	ne = c_node->next;
+	c_node->next = ne->next;
+	ne->next = NULL;
+	kfree(ne);
+	atomic_dec(&sa->ref_count);
+	if(atomic_read(&sa->ref_count) == 0)
+		destroy_vma_shared_area(sa);
+unlock:
+	spin_unlock(&sa->sl);
+	return;
 }
 
 void __weak arch_release_task_struct(struct task_struct *tsk)
@@ -587,6 +669,10 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		__vma_link_rb(mm, tmp, rb_link, rb_parent);
 		rb_link = &tmp->vm_rb.rb_right;
 		rb_parent = &tmp->vm_rb;
+
+		if(tmp->vm_flags & VM_SFORK){
+			add_vma_shared_area(tmp->sa, tmp);
+		}
 
 		mm->map_count++;
 		if (!(tmp->vm_flags & VM_WIPEONFORK))
@@ -2176,6 +2262,19 @@ static __latent_entropy struct task_struct *copy_process(
 
 	/* ok, now we should be set up.. */
 	p->pid = pid_nr(pid);
+	
+	/* 
+	* we have the pid over here, we iterate over every vma and if vma has sfork
+	* flag set, we add pid at the appropriate place
+	*/
+	// struct vm_area_struct *mpnt;
+	// for (mpnt = p->mm->mmap; mpnt; mpnt = mpnt->vm_next) {
+	// 	if((mpnt->vm_flags) & VM_SFORK){
+	// 		PASSED
+	// 		add_tsk_shared_area(mpnt->sa,p->pid);
+	// 	}
+	// }
+
 	if (clone_flags & CLONE_THREAD) {
 		p->group_leader = current->group_leader;
 		p->tgid = current->tgid;

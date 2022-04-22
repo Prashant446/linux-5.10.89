@@ -894,11 +894,11 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	if (vm_flags & VM_SHARED)
 		pte = pte_mkclean(pte);
     
-    /* for sfork */
-	if (vm_flags & VM_SFORK) {
-		printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-		pte = pte_mkclean(pte);
-	}
+    	// /* for sfork */
+	// if (vm_flags & VM_SFORK) {
+	// 	printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+	// 	pte = pte_mkclean(pte);
+	// }
     
 	pte = pte_mkold(pte);
 
@@ -3136,10 +3136,13 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 				     (VM_WRITE|VM_SHARED))
 			return wp_pfn_shared(vmf);
         
-        /* For sfork*/
-        if ((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
-				     (VM_WRITE|VM_SFORK))
-			return wp_pfn_shared(vmf);
+		/* For sfork*/
+		// if ((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
+		// 			(VM_WRITE|VM_SFORK))
+		// {
+		// 	PASSED
+		// 	return wp_pfn_shared(vmf);
+		// }
 
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		return wp_page_copy(vmf);
@@ -3172,11 +3175,12 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 	} else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 					(VM_WRITE|VM_SHARED))) {
 		return wp_page_shared(vmf);
-    } else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
-					(VM_WRITE|VM_SFORK))) {
-        printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-		return wp_page_shared(vmf);
-    }
+    } 
+//     else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
+// 					(VM_WRITE|VM_SFORK))) {
+//         printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+// 		return wp_page_shared(vmf);
+//     }
 copy:
 	/*
 	 * Ok, we need to copy. Oh, well..
@@ -3652,8 +3656,97 @@ setpte:
 
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(vma, vmf->address, vmf->pte);
+
+	if((vma->vm_flags & VM_SFORK) && vma->sa){
+		if(vmf->pte == NULL)
+			PASSED
+		printk("The initial value of ref_count is %d\n", page_ref_count(page));
+		/*
+		!Change here for sfork
+		*/
+		PASSED
+		printk("Current PID: %d\n",current->pid);
+		unsigned long start_addr = vma->vm_start;
+		if(!start_addr)
+			goto skip_while;
+		// printk("The start address: %px\n", vma->vm_start);
+		// printk("The end address: %px\n", vma->vm_end);
+		struct shared_area_struct* sa= vma->sa;
+		if(!sa){
+			printk("SA is not a valid struct\n");
+			goto skip_while;
+		}
+		struct vma_node* c_node = sa->head;
+
+		while(c_node){
+			if(c_node->vma){
+				struct vm_area_struct* vma_other = c_node->vma;
+				if(vma_other == vma);
+				else if(mmget_not_zero(vma_other->vm_mm)) {
+					PASSED
+					// int ret = vm_insert_page(vma_other,vmf->address,page);
+					// take mmap lock
+					// so that vm_mm doesn't get freed when the parent exits
+					mmgrab(vma_other->vm_mm);
+					mmap_read_lock(vma_other->vm_mm);
+
+					pmd_t* pmd = walk_to_pmd(vma_other->vm_mm, vmf->address);
+					if(!pmd){
+						PASSED
+						printk(KERN_INFO "Can't walk to pmd\n");
+						goto oom_sfork;
+					}
+					pte_t entry_new;
+					spinlock_t* ptl = pte_lockptr(vma_other->vm_mm, pmd);
+ 
+					entry_new = mk_pte(page, vma_other->vm_page_prot);
+					entry_new = pte_sw_mkyoung(entry_new);
+					if (vma_other->vm_flags & VM_WRITE)
+						entry_new = pte_mkwrite(pte_mkdirty(entry_new));
+
+					pte_t* pte = pte_offset_map_lock(vma_other->vm_mm, pmd, vmf->address,
+							&ptl);
+					if (!pte_none(*pte)) {
+						update_mmu_cache(vma_other, vmf->address, pte);
+						goto unlock_sfork;
+					}
+
+					ret = check_stable_address_space(vma_other->vm_mm);
+					if (ret)
+					{
+						PASSED
+						goto unlock_sfork;
+					}
+
+					// Deliver the page fault to userland, check inside PT lock 
+					// if (userfaultfd_missing(vma_other)) {
+					// 	pte_unmap_unlock(pte, ptl);
+					// 	put_page(page);
+					// 	return handle_userfault(vmf, VM_UFFD_MISSING);
+					// }
+					get_page(page);
+					inc_mm_counter_fast(vma_other->vm_mm, MM_ANONPAGES);
+					page_add_anon_rmap(page, vma_other, vmf->address, false);
+					// lru_cache_add_inactive_or_unevictable(page, vma_other);
+					set_pte_at(vma_other->vm_mm, vmf->address, pte, entry_new);
+					// No need to invalidate - it was non-present before
+					update_mmu_cache(vma_other, vmf->address, pte);
+					PASSED
+				unlock_sfork:
+					pte_unmap_unlock(pte, ptl);
+				oom_sfork:
+					mmap_read_unlock(vma_other->vm_mm);
+					// opposite of mmgrab()
+					mmdrop(vma_other->vm_mm);
+				}
+			}
+			c_node = c_node->next;
+		}
+		printk("The final value of ref_count is %d\n", page_ref_count(page));
+	}
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+skip_while:
 	return ret;
 release:
 	put_page(page);
@@ -3902,7 +3995,7 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 	if (write)
 		entry = maybe_mkwrite(pte_mkdirty(entry), vma);
 	/* copy-on-write page */
-	if (write && !(vma->vm_flags & (VM_SHARED | VM_SFORK))) {
+	if (write && !(vma->vm_flags & VM_SHARED)) {
 		inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(page, vma);
@@ -3942,7 +4035,7 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 
 	/* Did we COW the page? */
 	if ((vmf->flags & FAULT_FLAG_WRITE) &&
-	     !(vmf->vma->vm_flags & (VM_SHARED | VM_SFORK)))
+	     !(vmf->vma->vm_flags & VM_SHARED))
             page = vmf->cow_page;
 	else {
 		// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
@@ -4222,11 +4315,11 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 		}
 	} else if (!(vmf->flags & FAULT_FLAG_WRITE))
 		ret = do_read_fault(vmf);
-	else if (vma->vm_flags & VM_SFORK) /* for sfork */
-	{
-		printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-		ret = do_shared_fault(vmf);
-	}
+	// else if (vma->vm_flags & VM_SFORK) /* for sfork */
+	// {
+	// 	printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+	// 	ret = do_shared_fault(vmf);
+	// }
 	else if (!(vma->vm_flags & VM_SHARED))
 		ret = do_cow_fault(vmf);
 	else
@@ -4466,8 +4559,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!vmf->pte) {
 		if (vma_is_anonymous(vmf->vma)){
-			if(vmf->vma->vm_flags & VM_SFORK)
+			if(vmf->vma->vm_flags & VM_SFORK){
 				PASSED
+				printk("Process id going to do_anonymous_page: %d\n", current->pid);
+			}
 			return do_anonymous_page(vmf);
 		}
 		else
@@ -4605,8 +4700,23 @@ retry_pud:
 			}
 		}
 	}
+	/* 
+	  * Only one pagefault will fill page table for all processes 
+	  * sharing the region.
+	*/
+	if(unlikely(vmf.vma->vm_flags & VM_SFORK) && 
+				 vmf.vma->sa) {
+		spin_lock(&vmf.vma->sa->sl);
+		printk("Taken spin lock\n");
+	}
+	ret = handle_pte_fault(&vmf);
+	if((vmf.vma->vm_flags & VM_SFORK) && vmf.vma->sa) {
+		PASSED
+		spin_unlock(&vmf.vma->sa->sl);
+		printk("Unlocked spin lock\n");
+	}
 
-	return handle_pte_fault(&vmf);
+	return ret;
 }
 
 /**

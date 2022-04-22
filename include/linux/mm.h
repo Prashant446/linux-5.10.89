@@ -45,6 +45,11 @@ extern int sysctl_page_lock_unfairness;
 
 void init_mm_internals(void);
 
+void init_vma_shared_area(struct shared_area_struct **psa);
+void destroy_vma_shared_area(struct shared_area_struct *sa);
+void add_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* vma);
+void remove_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* vma);
+
 #ifndef CONFIG_NEED_MULTIPLE_NODES	/* Don't use mapnrs, do it properly */
 extern unsigned long max_mapnr;
 
