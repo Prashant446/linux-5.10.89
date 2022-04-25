@@ -18,12 +18,10 @@ requirements for building and running the kernel, and information about
 the problems which may result by upgrading your kernel.
 
 - This is a modified version of kernel for sfork implementation
-- The repo containing the library of sfork is [this](https://github.com/Chinmaygoyal/CS730-Project_RPC)
+- The repo containing the library of sfork is https://github.com/Chinmaygoyal/CS730-Project_RPC
 - In order to install the kernel first do:
 
-```bash
 make menuconfig
-```
 
 - After this `kernel-install.sh` file can be executed. This script uses 8 threads to execute the make commands.
 - Boot the newly installed kernel to use sfork command. 
