@@ -112,7 +112,8 @@
  * Minimum number of threads to boot the kernel
  */
 #define MIN_THREADS 20
-#define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+// #define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+#define PASSED ;
 
 /*
  * Maximum number of threads
@@ -185,7 +186,8 @@ void add_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* v
 	struct vma_node* c_node = sa->head;
 	int flag = 0;
 	
-	spin_lock(&sa->sl);
+	// printk("Taking spin lock add_vma_shared_area\n");
+	// spin_lock(&sa->sl);
 	
 	while(c_node){
 		if(c_node->vma == vma){
@@ -205,7 +207,8 @@ void add_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct* v
 	c_node->next = NULL;
 	atomic_inc(&sa->ref_count);
 unlock:
-	spin_unlock(&sa->sl);
+	// printk("Releasing spin lock add_vma_shared_area\n");
+	// spin_unlock(&sa->sl);
 	return;
 }
 
@@ -214,7 +217,8 @@ void remove_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct
 	struct vma_node* ne = NULL;
 	int flag = 0;
 
-	spin_lock(&sa->sl);
+	// printk("Taking spin lock remove_vma_shared_area\n");
+	// spin_lock(&sa->sl);
 	
 	while(c_node){
 		if(c_node->vma == vma){
@@ -230,13 +234,18 @@ void remove_vma_shared_area(struct shared_area_struct* sa, struct vm_area_struct
 	while(c_node->next->vma != vma) c_node = c_node->next;
 	ne = c_node->next;
 	c_node->next = ne->next;
-	ne->next = NULL;
+	// ne->next = NULL;
 	kfree(ne);
 	atomic_dec(&sa->ref_count);
 	if(atomic_read(&sa->ref_count) == 0)
+	{
+		// printk("Destroying vma_shared_area remove_vma_shared_area\n");
 		destroy_vma_shared_area(sa);
+		return;
+	}
 unlock:
-	spin_unlock(&sa->sl);
+	// printk("Releasing spin lock remove_vma_shared_area\n");
+	// spin_unlock(&sa->sl);
 	return;
 }
 
@@ -669,14 +678,25 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		__vma_link_rb(mm, tmp, rb_link, rb_parent);
 		rb_link = &tmp->vm_rb.rb_right;
 		rb_parent = &tmp->vm_rb;
-
-		if(tmp->vm_flags & VM_SFORK){
-			add_vma_shared_area(tmp->sa, tmp);
-		}
-
+		
 		mm->map_count++;
 		if (!(tmp->vm_flags & VM_WIPEONFORK))
+		{
+			if(unlikely(tmp->vm_flags & VM_SFORK))
+			{
+				spin_lock(&tmp->sa->sl);
+				// printk("Taken spin lock copy_page_range\n");
+				add_vma_shared_area(tmp->sa, tmp);
+			}
+			
 			retval = copy_page_range(tmp, mpnt);
+			
+			if(unlikely(tmp->vm_flags & VM_SFORK))
+			{
+				// printk("Releasing spin lock copy_page_range\n");
+				spin_unlock(&tmp->sa->sl);
+			}
+		}
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
 			tmp->vm_ops->open(tmp);

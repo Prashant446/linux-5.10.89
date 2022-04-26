@@ -99,7 +99,8 @@ struct page *mem_map;
 EXPORT_SYMBOL(mem_map);
 #endif
 
-#define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+// #define PASSED printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
+#define PASSED ;
 
 /*
  * A number of key systems in x86 including ioremap() rely on the assumption
@@ -895,10 +896,10 @@ copy_present_pte(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 		pte = pte_mkclean(pte);
     
     	// /* for sfork */
-	// if (vm_flags & VM_SFORK) {
-	// 	printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-	// 	pte = pte_mkclean(pte);
-	// }
+	if (vm_flags & VM_SFORK) {
+		PASSED
+		pte = pte_mkclean(pte);
+	}
     
 	pte = pte_mkold(pte);
 
@@ -1152,7 +1153,7 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	 * readonly mappings. The tradeoff is that copy_page_range is more
 	 * efficient than faulting.
 	 */
-	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP)) &&
+	if (!(src_vma->vm_flags & (VM_HUGETLB | VM_PFNMAP | VM_MIXEDMAP | VM_SFORK)) &&
 	    !src_vma->anon_vma)
 		return 0;
 
@@ -1175,8 +1176,8 @@ copy_page_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma)
 	 * parent mm. And a permission downgrade will only happen if
 	 * is_cow_mapping() returns true.
 	 */
-	if(src_vma->vm_flags & VM_SFORK)
-		PASSED
+	// if(src_vma->vm_flags & VM_SFORK)
+	// 	PASSED
 	is_cow = is_cow_mapping(src_vma->vm_flags);
 
 	if (is_cow) {
@@ -1486,6 +1487,12 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 
 	if (unlikely(vma->vm_flags & VM_PFNMAP))
 		untrack_pfn(vma, 0, 0);
+	
+	if(unlikely(vma->vm_flags & VM_SFORK))
+	{
+		spin_lock(&vma->sa->sl);
+		remove_vma_shared_area(vma->sa, vma);
+	}
 
 	if (start != end) {
 		if (unlikely(is_vm_hugetlb_page(vma))) {
@@ -1507,6 +1514,11 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 			}
 		} else
 			unmap_page_range(tlb, vma, start, end, details);
+	}
+
+	if(unlikely(vma->vm_flags & VM_SFORK))
+	{
+		spin_unlock(&vma->sa->sl);
 	}
 }
 
@@ -3135,15 +3147,6 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 		if ((vma->vm_flags & (VM_WRITE|VM_SHARED)) ==
 				     (VM_WRITE|VM_SHARED))
 			return wp_pfn_shared(vmf);
-        
-		/* For sfork*/
-		// if ((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
-		// 			(VM_WRITE|VM_SFORK))
-		// {
-		// 	PASSED
-		// 	return wp_pfn_shared(vmf);
-		// }
-
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 		return wp_page_copy(vmf);
 	}
@@ -3176,11 +3179,6 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
 					(VM_WRITE|VM_SHARED))) {
 		return wp_page_shared(vmf);
     } 
-//     else if (unlikely((vma->vm_flags & (VM_WRITE|VM_SFORK)) ==
-// 					(VM_WRITE|VM_SFORK))) {
-//         printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-// 		return wp_page_shared(vmf);
-//     }
 copy:
 	/*
 	 * Ok, we need to copy. Oh, well..
@@ -3582,12 +3580,16 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	if (unlikely(pmd_trans_unstable(vmf->pmd)))
 		return 0;
 
-	if(vma->vm_flags & VM_SFORK)
-		PASSED
-
 	/* Use the zero-page for reads */
-	if (!(vmf->flags & FAULT_FLAG_WRITE) &&
+	/* 
+	 ! No zero-page in case of VM_SFORK area
+	 * Could be used for efficency later with some other changes 
+	 * but this way is simpler for now.
+	 */
+	if (!(vmf->flags & FAULT_FLAG_WRITE) && likely(!(vma->vm_flags & VM_SFORK)) &&
 			!mm_forbids_zeropage(vma->vm_mm)) {
+		if(unlikely(vma->vm_flags & VM_SFORK))
+			PASSED
 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
 						vma->vm_page_prot));
 		vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd,
@@ -3660,12 +3662,12 @@ setpte:
 	if((vma->vm_flags & VM_SFORK) && vma->sa){
 		if(vmf->pte == NULL)
 			PASSED
-		printk("The initial value of ref_count is %d\n", page_ref_count(page));
+		// printk("The initial value of ref_count is %d\n", page_ref_count(page));
 		/*
 		!Change here for sfork
 		*/
 		PASSED
-		printk("Current PID: %d\n",current->pid);
+		// printk("Current PID: %d\n",current->pid);
 		unsigned long start_addr = vma->vm_start;
 		if(!start_addr)
 			goto skip_while;
@@ -3688,7 +3690,7 @@ setpte:
 					// take mmap lock
 					// so that vm_mm doesn't get freed when the parent exits
 					mmgrab(vma_other->vm_mm);
-					mmap_read_lock(vma_other->vm_mm);
+					// mmap_read_lock(vma_other->vm_mm);
 
 					pmd_t* pmd = walk_to_pmd(vma_other->vm_mm, vmf->address);
 					if(!pmd){
@@ -3696,6 +3698,10 @@ setpte:
 						printk(KERN_INFO "Can't walk to pmd\n");
 						goto oom_sfork;
 					}
+
+					if (pte_alloc(vma->vm_mm, vmf->pmd))
+						goto oom_sfork;
+
 					pte_t entry_new;
 					spinlock_t* ptl = pte_lockptr(vma_other->vm_mm, pmd);
  
@@ -3726,7 +3732,9 @@ setpte:
 					// }
 					get_page(page);
 					inc_mm_counter_fast(vma_other->vm_mm, MM_ANONPAGES);
-					page_add_anon_rmap(page, vma_other, vmf->address, false);
+					// page_add_anon_rmap(page, vma_other, vmf->address, false);
+					page_dup_rmap(page, false);
+					entry = pte_mkold(pte_mkclean(entry));
 					// lru_cache_add_inactive_or_unevictable(page, vma_other);
 					set_pte_at(vma_other->vm_mm, vmf->address, pte, entry_new);
 					// No need to invalidate - it was non-present before
@@ -3735,18 +3743,18 @@ setpte:
 				unlock_sfork:
 					pte_unmap_unlock(pte, ptl);
 				oom_sfork:
-					mmap_read_unlock(vma_other->vm_mm);
+					// mmap_read_unlock(vma_other->vm_mm);
 					// opposite of mmgrab()
 					mmdrop(vma_other->vm_mm);
 				}
 			}
 			c_node = c_node->next;
 		}
-		printk("The final value of ref_count is %d\n", page_ref_count(page));
+		// printk("The final value of ref_count is %d\n", page_ref_count(page));
 	}
+skip_while:
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
-skip_while:
 	return ret;
 release:
 	put_page(page);
@@ -4000,7 +4008,6 @@ vm_fault_t alloc_set_pte(struct vm_fault *vmf, struct page *page)
 		page_add_new_anon_rmap(page, vma, vmf->address, false);
 		lru_cache_add_inactive_or_unevictable(page, vma);
 	} else {
-        // printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page, false);
 	}
@@ -4038,7 +4045,6 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	     !(vmf->vma->vm_flags & VM_SHARED))
             page = vmf->cow_page;
 	else {
-		// printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
 		page = vmf->page;
 	}
 
@@ -4315,11 +4321,6 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 		}
 	} else if (!(vmf->flags & FAULT_FLAG_WRITE))
 		ret = do_read_fault(vmf);
-	// else if (vma->vm_flags & VM_SFORK) /* for sfork */
-	// {
-	// 	printk(KERN_ALERT "DEBUG: Passed %s %d \n",__FUNCTION__,__LINE__);
-	// 	ret = do_shared_fault(vmf);
-	// }
 	else if (!(vma->vm_flags & VM_SHARED))
 		ret = do_cow_fault(vmf);
 	else
@@ -4559,10 +4560,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
 	if (!vmf->pte) {
 		if (vma_is_anonymous(vmf->vma)){
-			if(vmf->vma->vm_flags & VM_SFORK){
-				PASSED
-				printk("Process id going to do_anonymous_page: %d\n", current->pid);
-			}
+			// if(vmf->vma->vm_flags & VM_SFORK){
+			// 	PASSED
+			// 	printk("Process id going to do_anonymous_page: %d\n", current->pid);
+			// }
 			return do_anonymous_page(vmf);
 		}
 		else
@@ -4704,16 +4705,15 @@ retry_pud:
 	  * Only one pagefault will fill page table for all processes 
 	  * sharing the region.
 	*/
-	if(unlikely(vmf.vma->vm_flags & VM_SFORK) && 
-				 vmf.vma->sa) {
-		spin_lock(&vmf.vma->sa->sl);
-		printk("Taken spin lock\n");
+	if(unlikely(vma->vm_flags & VM_SFORK)) {
+		spin_lock(&vma->sa->sl);
+		// printk("Taken spin lock\n");
 	}
 	ret = handle_pte_fault(&vmf);
 	if((vmf.vma->vm_flags & VM_SFORK) && vmf.vma->sa) {
 		PASSED
-		spin_unlock(&vmf.vma->sa->sl);
-		printk("Unlocked spin lock\n");
+		// printk("Unlocking spin lock\n");
+		spin_unlock(&vma->sa->sl);
 	}
 
 	return ret;
